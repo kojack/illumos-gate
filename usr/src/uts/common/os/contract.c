@@ -1837,10 +1837,8 @@ cte_rele(ct_kevent_t *e)
 	contract_rele(e->cte_contract);
 
 	mutex_destroy(&e->cte_lock);
-	if (e->cte_data)
-		nvlist_free(e->cte_data);
-	if (e->cte_gdata)
-		nvlist_free(e->cte_gdata);
+	nvlist_free(e->cte_data);
+	nvlist_free(e->cte_gdata);
 	kmem_free(e, sizeof (ct_kevent_t));
 }
 
@@ -2302,7 +2300,7 @@ cte_publish_all(contract_t *ct, ct_kevent_t *e, nvlist_t *data, nvlist_t *gdata)
 	e->cte_data = data;
 	e->cte_gdata = gdata;
 	e->cte_refs = 3;
-	evid = e->cte_id = atomic_add_64_nv(&ct->ct_type->ct_type_evid, 1);
+	evid = e->cte_id = atomic_inc_64_nv(&ct->ct_type->ct_type_evid);
 	contract_hold(ct);
 
 	/*

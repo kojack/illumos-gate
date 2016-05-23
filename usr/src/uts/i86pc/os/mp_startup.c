@@ -27,7 +27,7 @@
  * All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -171,6 +171,7 @@ init_cpu_syscall(struct cpu *cp)
 #if defined(__amd64)
 	if (is_x86_feature(x86_featureset, X86FSET_MSR) &&
 	    is_x86_feature(x86_featureset, X86FSET_ASYSC)) {
+		uint64_t flags;
 
 #if !defined(__lint)
 		/*
@@ -199,7 +200,10 @@ init_cpu_syscall(struct cpu *cp)
 		 * This list of flags is masked off the incoming
 		 * %rfl when we enter the kernel.
 		 */
-		wrmsr(MSR_AMD_SFMASK, (uint64_t)(uintptr_t)(PS_IE | PS_T));
+		flags = PS_IE | PS_T;
+		if (is_x86_feature(x86_featureset, X86FSET_SMAP) == B_TRUE)
+			flags |= PS_ACHK;
+		wrmsr(MSR_AMD_SFMASK, flags);
 	}
 #endif
 
@@ -410,11 +414,6 @@ mp_cpu_configure_common(int cpun, boolean_t boot)
 	} else {
 		cp->cpu_idt = CPU->cpu_idt;
 	}
-
-	/*
-	 * Get interrupt priority data from cpu 0.
-	 */
-	cp->cpu_pri_data = CPU->cpu_pri_data;
 
 	/*
 	 * alloc space for cpuid info
@@ -1641,8 +1640,20 @@ mp_startup_common(boolean_t boot)
 	 * We need to get TSC on this proc synced (i.e., any delta
 	 * from cpu0 accounted for) as soon as we can, because many
 	 * many things use gethrtime/pc_gethrestime, including
-	 * interrupts, cmn_err, etc.
+	 * interrupts, cmn_err, etc.  Before we can do that, we want to
+	 * clear TSC if we're on a buggy Sandy/Ivy Bridge CPU, so do that
+	 * right away.
 	 */
+	bzero(new_x86_featureset, BT_SIZEOFMAP(NUM_X86_FEATURES));
+	cpuid_pass1(cp, new_x86_featureset);
+
+	if (boot && get_hwenv() == HW_NATIVE &&
+	    cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
+	    cpuid_getfamily(CPU) == 6 &&
+	    (cpuid_getmodel(CPU) == 0x2d || cpuid_getmodel(CPU) == 0x3e) &&
+	    is_x86_feature(new_x86_featureset, X86FSET_TSC)) {
+		(void) wrmsr(REG_TSC, 0UL);
+	}
 
 	/* Let the control CPU continue into tsc_sync_master() */
 	mp_startup_signal(&procset_slave, cp->cpu_id);
@@ -1660,15 +1671,11 @@ mp_startup_common(boolean_t boot)
 	 */
 	(void) (*ap_mlsetup)();
 
-	bzero(new_x86_featureset, BT_SIZEOFMAP(NUM_X86_FEATURES));
-	cpuid_pass1(cp, new_x86_featureset);
-
 #ifndef __xpv
 	/*
 	 * Program this cpu's PAT
 	 */
-	if (is_x86_feature(x86_featureset, X86FSET_PAT))
-		pat_sync();
+	pat_sync();
 #endif
 
 	/*

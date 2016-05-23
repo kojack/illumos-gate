@@ -222,7 +222,7 @@ beCopy(PyObject *self, PyObject *args)
 		    NULL, NULL));
 	}
 
-	if (beProps != NULL) nvlist_free(beProps);
+	nvlist_free(beProps);
 
 	if (trgtBeName == NULL) {
 		/*
@@ -854,6 +854,11 @@ convertBEInfoToDictionary(be_node_list_t *be, PyObject **listDict)
 
 	if (PyDict_SetItemString(*listDict, BE_ATTR_ACTIVE_ON_BOOT,
 	    (be->be_active_on_boot ? Py_True : Py_False)) != 0) {
+		return (B_FALSE);
+	}
+
+	if (PyDict_SetItemString(*listDict, BE_ATTR_GLOBAL_ACTIVE,
+	    (be->be_global_active ? Py_True : Py_False)) != 0) {
 		return (B_FALSE);
 	}
 

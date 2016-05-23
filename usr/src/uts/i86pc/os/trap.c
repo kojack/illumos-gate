@@ -625,6 +625,34 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		}
 
 		/*
+		 * If we have an Instruction fault in kernel mode, then that
+		 * means we've tried to execute a user page (SMEP) or both of
+		 * PAE and NXE are enabled. In either case, given that it's a
+		 * kernel fault, we should panic immediately and not try to make
+		 * any more forward progress. This indicates a bug in the
+		 * kernel, which if execution continued, could be exploited to
+		 * wreak havoc on the system.
+		 */
+		if (errcode & PF_ERR_EXEC) {
+			(void) die(type, rp, addr, cpuid);
+		}
+
+		/*
+		 * We need to check if SMAP is in play. If SMAP is in play, then
+		 * any access to a user page will show up as a protection
+		 * violation. To see if SMAP is enabled we first check if it's a
+		 * user address and whether we have the feature flag set. If we
+		 * do and the interrupted registers do not allow for user
+		 * accesses (PS_ACHK is not enabled), then we need to die
+		 * immediately.
+		 */
+		if (addr < (caddr_t)kernelbase &&
+		    is_x86_feature(x86_featureset, X86FSET_SMAP) == B_TRUE &&
+		    (rp->r_ps & PS_ACHK) == 0) {
+			(void) die(type, rp, addr, cpuid);
+		}
+
+		/*
 		 * See if we can handle as pagefault. Save lofault and onfault
 		 * across this. Here we assume that an address less than
 		 * KERNELBASE is a user fault.  We can do this as copy.s

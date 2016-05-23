@@ -26,6 +26,7 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013, Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include "igb_sw.h"
@@ -335,6 +336,30 @@ static adapter_info_t igb_i210_cap = {
 	0xfff00000		/* mask for RXDCTL register */
 };
 
+static adapter_info_t igb_i354_cap = {
+	/* limits */
+	8,		/* maximum number of rx queues */
+	1,		/* minimum number of rx queues */
+	4,		/* default number of rx queues */
+	8,		/* maximum number of tx queues */
+	1,		/* minimum number of tx queues */
+	4,		/* default number of tx queues */
+	65535,		/* maximum interrupt throttle rate */
+	0,		/* minimum interrupt throttle rate */
+	200,		/* default interrupt throttle rate */
+
+	/* function pointers */
+	igb_enable_adapter_interrupts_82580,
+	igb_setup_msix_82580,
+
+	/* capabilities */
+	(IGB_FLAG_HAS_DCA |	/* capability flags */
+	IGB_FLAG_VMDQ_POOL |
+	IGB_FLAG_NEED_CTX_IDX),
+
+	0xfff00000		/* mask for RXDCTL register */
+};
+
 /*
  * Module Initialization Functions
  */
@@ -572,7 +597,9 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * default.
 	 */
 	if (igb->hw.mac.type == e1000_i350)
-		(void) e1000_set_eee_i350(&igb->hw);
+		(void) e1000_set_eee_i350(&igb->hw, B_FALSE, B_FALSE);
+	else if (igb->hw.mac.type == e1000_i354)
+		(void) e1000_set_eee_i354(&igb->hw, B_FALSE, B_FALSE);
 
 	return (DDI_SUCCESS);
 
@@ -899,6 +926,9 @@ igb_identify_hardware(igb_t *igb)
 	case e1000_i210:
 	case e1000_i211:
 		igb->capab = &igb_i210_cap;
+		break;
+	case e1000_i354:
+		igb->capab = &igb_i354_cap;
 		break;
 	default:
 		return (IGB_FAILURE);
@@ -1318,6 +1348,7 @@ igb_init_adapter(igb_t *igb)
 		break;
 	case e1000_82580:
 	case e1000_i350:
+	case e1000_i354:
 		pba = E1000_READ_REG(hw, E1000_RXPBS);
 		pba = e1000_rxpbs_adjust_82580(pba);
 		break;
@@ -1834,7 +1865,9 @@ igb_start(igb_t *igb, boolean_t alloc_buffer)
 		goto start_failure;
 
 	if (igb->hw.mac.type == e1000_i350)
-		(void) e1000_set_eee_i350(&igb->hw);
+		(void) e1000_set_eee_i350(&igb->hw, B_FALSE, B_FALSE);
+	else if (igb->hw.mac.type == e1000_i354)
+		(void) e1000_set_eee_i354(&igb->hw, B_FALSE, B_FALSE);
 
 	for (i = igb->num_tx_rings - 1; i >= 0; i--)
 		mutex_exit(&igb->tx_rings[i].tx_lock);
@@ -2583,7 +2616,8 @@ igb_init_unicst(igb_t *igb)
 	} else {
 		/* Re-configure the RAR registers */
 		for (slot = 0; slot < igb->unicst_total; slot++) {
-			e1000_rar_set_vmdq(hw, igb->unicst_addr[slot].mac.addr,
+			(void) e1000_rar_set_vmdq(hw,
+			    igb->unicst_addr[slot].mac.addr,
 			    slot, igb->vmdq_mode,
 			    igb->unicst_addr[slot].mac.group_index);
 		}
@@ -2628,7 +2662,7 @@ igb_unicst_set(igb_t *igb, const uint8_t *mac_addr,
 	/*
 	 * Set the unicast address to the RAR register
 	 */
-	e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
+	(void) e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
 
 	if (igb_check_acc_handle(igb->osdep.reg_handle) != DDI_FM_OK) {
 		ddi_fm_service_impact(igb->dip, DDI_SERVICE_DEGRADED);

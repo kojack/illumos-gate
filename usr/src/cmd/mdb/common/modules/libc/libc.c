@@ -22,9 +22,7 @@
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
- */
-/*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2016, Joyent, Inc.
  */
 
 #include <sys/mdb_modapi.h>
@@ -99,6 +97,20 @@ d_jmp_buf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+const mdb_bitmask_t uc_flags_bits[] = {
+	{ "UC_SIGMASK", UC_SIGMASK, UC_SIGMASK },
+	{ "UC_STACK", UC_STACK, UC_STACK },
+	{ "UC_CPU", UC_CPU, UC_CPU },
+	{ "UC_FPU", UC_FPU, UC_FPU },
+#if defined(UC_INTR)
+	{ "UC_INTR", UC_INTR, UC_INTR },
+#endif
+#if defined(UC_ASR)
+	{ "UC_ASR", UC_ASR, UC_ASR },
+#endif
+	{ NULL, 0, 0 }
+};
+
 /*ARGSUSED*/
 static int
 d_ucontext(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
@@ -113,7 +125,8 @@ d_ucontext(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	mdb_printf("  flags    = 0x%lx\n", uc.uc_flags);
+	mdb_printf("  flags    = 0x%lx <%b>\n", uc.uc_flags,
+	    (uint_t)uc.uc_flags, uc_flags_bits);
 	mdb_printf("  link     = 0x%p\n", uc.uc_link);
 	mdb_printf("  sigmask  = 0x%08x 0x%08x 0x%08x 0x%08x\n",
 	    uc.uc_sigmask.__sigbits[0], uc.uc_sigmask.__sigbits[1],
@@ -778,6 +791,13 @@ d_uberdata(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    prt_addr((void *)(addr + OFFSET(atexit_root.exitfns_lock)), 1),
 	    prt_addr(uberdata.atexit_root.head, 1),
 	    prt_addr(uberdata.atexit_root.exit_frame_monitor, 0));
+
+	HD("&quickexit_root       head");
+	mdb_printf(OFFSTR "%s %s\n",
+	    OFFSET(quickexit_root),
+	    prt_addr((void *)(addr + OFFSET(quickexit_root.exitfns_lock)), 1),
+	    prt_addr(uberdata.quickexit_root.head, 0));
+
 
 	HD("&tsd_metadata         tsdm_nkeys tsdm_nused tsdm_destro");
 	mdb_printf(OFFSTR "%s %-10d %-10d %s\n",

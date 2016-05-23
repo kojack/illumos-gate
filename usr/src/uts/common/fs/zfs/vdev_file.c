@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -158,7 +158,7 @@ vdev_file_io_intr(buf_t *bp)
 		zio->io_error = SET_ERROR(ENOSPC);
 
 	kmem_free(vb, sizeof (vdev_buf_t));
-	zio_interrupt(zio);
+	zio_delay_interrupt(zio);
 }
 
 static void
@@ -182,7 +182,7 @@ vdev_file_io_strategy(void *arg)
 	}
 }
 
-static int
+static void
 vdev_file_io_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
@@ -194,7 +194,8 @@ vdev_file_io_start(zio_t *zio)
 		/* XXPOLICY */
 		if (!vdev_readable(vd)) {
 			zio->io_error = SET_ERROR(ENXIO);
-			return (ZIO_PIPELINE_CONTINUE);
+			zio_interrupt(zio);
+			return;
 		}
 
 		switch (zio->io_cmd) {
@@ -206,8 +207,12 @@ vdev_file_io_start(zio_t *zio)
 			zio->io_error = SET_ERROR(ENOTSUP);
 		}
 
-		return (ZIO_PIPELINE_CONTINUE);
+		zio_execute(zio);
+		return;
 	}
+
+	ASSERT(zio->io_type == ZIO_TYPE_READ || zio->io_type == ZIO_TYPE_WRITE);
+	zio->io_target_timestamp = zio_handle_io_delay(zio);
 
 	vb = kmem_alloc(sizeof (vdev_buf_t), KM_SLEEP);
 
@@ -225,8 +230,6 @@ vdev_file_io_start(zio_t *zio)
 
 	VERIFY3U(taskq_dispatch(system_taskq, vdev_file_io_strategy, bp,
 	    TQ_SLEEP), !=, 0);
-
-	return (ZIO_PIPELINE_STOP);
 }
 
 /* ARGSUSED */

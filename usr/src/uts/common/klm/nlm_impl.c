@@ -26,7 +26,7 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
@@ -368,11 +368,48 @@ nlm_gc(struct nlm_globals *g)
 		    clock_t, now);
 
 		/*
+		 * Find all obviously unused vholds and destroy them.
+		 */
+		for (hostp = avl_first(&g->nlm_hosts_tree); hostp != NULL;
+		    hostp = AVL_NEXT(&g->nlm_hosts_tree, hostp)) {
+			struct nlm_vhold *nvp;
+
+			mutex_enter(&hostp->nh_lock);
+
+			nvp = TAILQ_FIRST(&hostp->nh_vholds_list);
+			while (nvp != NULL) {
+				struct nlm_vhold *new_nvp;
+
+				new_nvp = TAILQ_NEXT(nvp, nv_link);
+
+				/*
+				 * If these conditions are met, the vhold is
+				 * obviously unused and we will destroy it.  In
+				 * a case either v_filocks and/or v_shrlocks is
+				 * non-NULL the vhold might still be unused by
+				 * the host, but it is expensive to check that.
+				 * We defer such check until the host is idle.
+				 * The expensive check is done below without
+				 * the global lock held.
+				 */
+				if (nvp->nv_refcnt == 0 &&
+				    nvp->nv_vp->v_filocks == NULL &&
+				    nvp->nv_vp->v_shrlocks == NULL) {
+					nlm_vhold_destroy(hostp, nvp);
+				}
+
+				nvp = new_nvp;
+			}
+
+			mutex_exit(&hostp->nh_lock);
+		}
+
+		/*
 		 * Handle all hosts that are unused at the moment
 		 * until we meet one with idle timeout in future.
 		 */
 		while ((hostp = TAILQ_FIRST(&g->nlm_idle_hosts)) != NULL) {
-			bool_t has_locks = FALSE;
+			bool_t has_locks;
 
 			if (hostp->nh_idle_timeout > now)
 				break;
@@ -398,23 +435,24 @@ nlm_gc(struct nlm_globals *g)
 			mutex_enter(&g->lock);
 
 			/*
-			 * While we were doing expensive operations outside of
-			 * nlm_globals critical section, somebody could
-			 * take the host, add lock/share to one of its vnodes
-			 * and release the host back. If so, host's idle timeout
-			 * is renewed and our information about locks on the
-			 * given host is outdated.
+			 * While we were doing expensive operations
+			 * outside of nlm_globals critical section,
+			 * somebody could take the host and remove it
+			 * from the idle list.  Whether its been
+			 * reinserted or not, our information about
+			 * the host is outdated, and we should take no
+			 * further action.
 			 */
-			if (hostp->nh_idle_timeout > now)
+			if ((hostp->nh_flags & NLM_NH_INIDLE) == 0 ||
+			    hostp->nh_idle_timeout > now)
 				continue;
 
 			/*
-			 * If either host has locks or somebody has began to
-			 * use it while we were outside the nlm_globals critical
-			 * section. In both cases we have to renew host's
-			 * timeout and put it to the end of LRU list.
+			 * If the host has locks we have to renew the
+			 * host's timeout and put it at the end of LRU
+			 * list.
 			 */
-			if (has_locks || hostp->nh_refs > 0) {
+			if (has_locks) {
 				TAILQ_REMOVE(&g->nlm_idle_hosts,
 				    hostp, nh_link);
 				hostp->nh_idle_timeout = now + idle_period;
@@ -618,7 +656,7 @@ nlm_suspend_zone(struct nlm_globals *g)
  * (see nlm_suspend_zone) and its main purpose to check
  * whether remote locks owned by hosts are still in consistent
  * state. If they aren't, resume function tries to reclaim
- * reclaim locks (for client side hosts) and clean locks (for
+ * locks (for client side hosts) and clean locks (for
  * server side hosts).
  */
 static void
@@ -1007,6 +1045,20 @@ nlm_vhold_release(struct nlm_host *hostp, struct nlm_vhold *nvp)
 	mutex_enter(&hostp->nh_lock);
 	ASSERT(nvp->nv_refcnt > 0);
 	nvp->nv_refcnt--;
+
+	/*
+	 * If these conditions are met, the vhold is obviously unused and we
+	 * will destroy it.  In a case either v_filocks and/or v_shrlocks is
+	 * non-NULL the vhold might still be unused by the host, but it is
+	 * expensive to check that.  We defer such check until the host is
+	 * idle.  The expensive check is done in the NLM garbage collector.
+	 */
+	if (nvp->nv_refcnt == 0 &&
+	    nvp->nv_vp->v_filocks == NULL &&
+	    nvp->nv_vp->v_shrlocks == NULL) {
+		nlm_vhold_destroy(hostp, nvp);
+	}
+
 	mutex_exit(&hostp->nh_lock);
 }
 
@@ -1026,6 +1078,9 @@ static void
 nlm_vhold_destroy(struct nlm_host *hostp, struct nlm_vhold *nvp)
 {
 	ASSERT(MUTEX_HELD(&hostp->nh_lock));
+
+	ASSERT(nvp->nv_refcnt == 0);
+	ASSERT(TAILQ_EMPTY(&nvp->nv_slreqs));
 
 	VERIFY(mod_hash_remove(hostp->nh_vholds_by_vp,
 	    (mod_hash_key_t)nvp->nv_vp,
@@ -1139,6 +1194,7 @@ static void
 nlm_host_unregister(struct nlm_globals *g, struct nlm_host *hostp)
 {
 	ASSERT(hostp->nh_refs == 0);
+	ASSERT(hostp->nh_flags & NLM_NH_INIDLE);
 
 	avl_remove(&g->nlm_hosts_tree, hostp);
 	VERIFY(mod_hash_remove(g->nlm_hosts_hash,
@@ -1608,7 +1664,7 @@ out:
 /*
  * Find or create an NLM host for the given name and address.
  *
- * The remote host is determined by all of: name, netidd, address.
+ * The remote host is determined by all of: name, netid, address.
  * Note that the netid is whatever nlm_svc_add_ep() gave to
  * svc_tli_kcreate() for the service binding.  If any of these
  * are different, allocate a new host (new sysid).
@@ -1658,7 +1714,7 @@ nlm_host_findcreate(struct nlm_globals *g, char *name,
 		avl_insert(&g->nlm_hosts_tree, host, where);
 
 		/*
-		 * Insert host ot the hosts hash table that is
+		 * Insert host to the hosts hash table that is
 		 * used to lookup host by sysid.
 		 */
 		VERIFY(mod_hash_insert(g->nlm_hosts_hash,
@@ -1669,8 +1725,15 @@ nlm_host_findcreate(struct nlm_globals *g, char *name,
 	mutex_exit(&g->lock);
 
 out:
-	if (newhost != NULL)
+	if (newhost != NULL) {
+		/*
+		 * We do not need the preallocated nlm_host
+		 * so decrement the reference counter
+		 * and destroy it.
+		 */
+		newhost->nh_refs--;
 		nlm_host_destroy(newhost);
+	}
 
 	return (host);
 }
@@ -1725,20 +1788,18 @@ out:
  * any, it removes them.
  * NOTE: only unused hosts can be in idle state.
  */
-void
-nlm_host_release(struct nlm_globals *g, struct nlm_host *hostp)
+static void
+nlm_host_release_locked(struct nlm_globals *g, struct nlm_host *hostp)
 {
 	if (hostp == NULL)
 		return;
 
-	mutex_enter(&g->lock);
+	ASSERT(MUTEX_HELD(&g->lock));
 	ASSERT(hostp->nh_refs > 0);
 
 	hostp->nh_refs--;
-	if (hostp->nh_refs != 0) {
-		mutex_exit(&g->lock);
+	if (hostp->nh_refs != 0)
 		return;
-	}
 
 	/*
 	 * The very last reference to the host was dropped,
@@ -1751,6 +1812,16 @@ nlm_host_release(struct nlm_globals *g, struct nlm_host *hostp)
 	ASSERT((hostp->nh_flags & NLM_NH_INIDLE) == 0);
 	TAILQ_INSERT_TAIL(&g->nlm_idle_hosts, hostp, nh_link);
 	hostp->nh_flags |= NLM_NH_INIDLE;
+}
+
+void
+nlm_host_release(struct nlm_globals *g, struct nlm_host *hostp)
+{
+	if (hostp == NULL)
+		return;
+
+	mutex_enter(&g->lock);
+	nlm_host_release_locked(g, hostp);
 	mutex_exit(&g->lock);
 }
 
@@ -2011,7 +2082,7 @@ nlm_slock_grant(struct nlm_globals *g,
  */
 int
 nlm_slreq_register(struct nlm_host *hostp, struct nlm_vhold *nvp,
-	struct flock64 *flp)
+    struct flock64 *flp)
 {
 	struct nlm_slreq *slr, *new_slr = NULL;
 	int ret = EEXIST;
@@ -2052,7 +2123,7 @@ out:
  */
 int
 nlm_slreq_unregister(struct nlm_host *hostp, struct nlm_vhold *nvp,
-	struct flock64 *flp)
+    struct flock64 *flp)
 {
 	struct nlm_slreq *slr;
 
@@ -2503,6 +2574,14 @@ nlm_unexport(struct exportinfo *exi)
 	while (hostp != NULL) {
 		struct nlm_vhold *nvp;
 
+		if (hostp->nh_flags & NLM_NH_INIDLE) {
+			TAILQ_REMOVE(&g->nlm_idle_hosts, hostp, nh_link);
+			hostp->nh_flags &= ~NLM_NH_INIDLE;
+		}
+		hostp->nh_refs++;
+
+		mutex_exit(&g->lock);
+
 		mutex_enter(&hostp->nh_lock);
 		TAILQ_FOREACH(nvp, &hostp->nh_vholds_list, nv_link) {
 			vnode_t *vp;
@@ -2527,8 +2606,11 @@ nlm_unexport(struct exportinfo *exi)
 			mutex_enter(&hostp->nh_lock);
 			nvp->nv_refcnt--;
 		}
-
 		mutex_exit(&hostp->nh_lock);
+
+		mutex_enter(&g->lock);
+		nlm_host_release_locked(g, hostp);
+
 		hostp = AVL_NEXT(&g->nlm_hosts_tree, hostp);
 	}
 

@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
 /*
@@ -70,9 +71,12 @@
 
 /*
  * on_fault()
+ *
  * Catch lofault faults. Like setjmp except it returns one
  * if code following causes uncorrectable fault. Turned off
- * by calling no_fault().
+ * by calling no_fault(). Note that while under on_fault(),
+ * SMAP is disabled. For more information see
+ * uts/intel/ia32/ml/copy.s.
  */
 
 #if defined(__lint)
@@ -95,6 +99,7 @@ no_fault(void)
 	leaq	catch_fault(%rip), %rdx
 	movq	%rdi, T_ONFAULT(%rsi)		/* jumpbuf in t_onfault */
 	movq	%rdx, T_LOFAULT(%rsi)		/* catch_fault in t_lofault */
+	call	smap_disable			/* allow user accesses */
 	jmp	setjmp				/* let setjmp do the rest */
 
 catch_fault:
@@ -103,6 +108,7 @@ catch_fault:
 	xorl	%eax, %eax
 	movq	%rax, T_ONFAULT(%rsi)		/* turn off onfault */
 	movq	%rax, T_LOFAULT(%rsi)		/* turn off lofault */
+	call	smap_enable			/* disallow user accesses */
 	jmp	longjmp				/* let longjmp do the rest */
 	SET_SIZE(on_fault)
 
@@ -111,6 +117,7 @@ catch_fault:
 	xorl	%eax, %eax
 	movq	%rax, T_ONFAULT(%rsi)		/* turn off onfault */
 	movq	%rax, T_LOFAULT(%rsi)		/* turn off lofault */
+	call	smap_enable			/* disallow user accesses */
 	ret
 	SET_SIZE(no_fault)
 
@@ -2800,7 +2807,8 @@ lowbit(ulong_t i)
 
 	ENTRY(lowbit)
 	movl	$-1, %eax
-	bsfq	%rdi, %rax
+	bsfq	%rdi, %rdi
+	cmovnz	%edi, %eax
 	incl	%eax
 	ret
 	SET_SIZE(lowbit)
@@ -2808,9 +2816,12 @@ lowbit(ulong_t i)
 #elif defined(__i386)
 
 	ENTRY(lowbit)
-	movl	$-1, %eax
 	bsfl	4(%esp), %eax
+	jz	0f
 	incl	%eax
+	ret
+0:
+	xorl	%eax, %eax
 	ret
 	SET_SIZE(lowbit)
 
@@ -2824,25 +2835,43 @@ int
 highbit(ulong_t i)
 { return (0); }
 
+/*ARGSUSED*/
+int
+highbit64(uint64_t i)
+{ return (0); }
+
 #else	/* __lint */
 
 #if defined(__amd64)
 
 	ENTRY(highbit)
+	ALTENTRY(highbit64)
 	movl	$-1, %eax
-	bsrq	%rdi, %rax
+	bsrq	%rdi, %rdi
+	cmovnz	%edi, %eax
 	incl	%eax
 	ret
+	SET_SIZE(highbit64)
 	SET_SIZE(highbit)
 
 #elif defined(__i386)
 
 	ENTRY(highbit)
-	movl	$-1, %eax
 	bsrl	4(%esp), %eax
+	jz	0f
 	incl	%eax
 	ret
+0:
+	xorl	%eax, %eax
+	ret    
 	SET_SIZE(highbit)
+
+	ENTRY(highbit64)
+	bsrl	8(%esp), %eax
+	jz	highbit
+	addl	$33, %eax
+	ret
+	SET_SIZE(highbit64)
 
 #endif	/* __i386 */
 #endif	/* __lint */
@@ -3910,6 +3939,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushq	%rbp
 	movq	%rsp, %rbp
 #ifdef DEBUG
+	testq	%rdx,%rdx
+	je	1f
 	movq	postbootkernelbase(%rip), %r11
 	cmpq	%r11, %rdi
 	jb	0f
@@ -3938,6 +3969,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushl	%ebp
 	movl	%esp, %ebp	/ create new stack frame
 #ifdef DEBUG
+	cmpl	$0, ARG_LENGTH(%ebp)
+	je	1f
 	movl    postbootkernelbase, %eax
 	cmpl    %eax, ARG_S1(%ebp)
 	jb	0f

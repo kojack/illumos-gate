@@ -21,6 +21,7 @@
  */
 
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright 1985, 1992 by Mortice Kern Systems Inc.  All rights reserved.
  */
 
@@ -151,26 +152,28 @@ typedef	struct	glob_t	{
 #define	GLOB_ABORTED	(-1)		/* GLOB_ERR set or errfunc return!=0 */
 #define	GLOB_ABEND	GLOB_ABORTED	/* backward compatibility */
 
+
 #ifdef __PRAGMA_REDEFINE_EXTNAME
+#if !defined(_LP64) && _FILE_OFFSET_BITS == 64
+#pragma	redefine_extname	glob	_glob_ext64
+#pragma	redefine_extname	globfree	_globfree_ext64
+#else
 #pragma	redefine_extname	glob	_glob_ext
 #pragma	redefine_extname	globfree	_globfree_ext
+#endif /* !_LP64 && _FILE_OFFSET_BITS == 64 */
 #else /* __PRAGMA_REDEFINE_EXTNAME */
+#if !defined(_LP64) && _FILE_OFFSET_BITS == 64
+#define	glob	_glob_ext64
+#define	globfree	_globfree_ext64
+#else
 #define	glob	_glob_ext
 #define	globfree	_globfree_ext
+#endif /* !_LP64 && _FILE_OFFSET_BITS == 64 */
 #endif /* __PRAGMA_REDEFINE_EXTNAME */
-
-#if defined(__STDC__)
 
 extern int glob(const char *_RESTRICT_KYWD, int, int(*)(const char *, int),
 		glob_t *_RESTRICT_KYWD);
 extern void globfree(glob_t *);
-
-#else /* __STDC__ */
-
-extern int glob();
-extern void globfree();
-
-#endif /* __STDC__ */
 
 #ifdef	__cplusplus
 }

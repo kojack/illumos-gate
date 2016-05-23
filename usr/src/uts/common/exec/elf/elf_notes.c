@@ -26,7 +26,7 @@
 
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -376,11 +376,27 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		(void) vnodetopath(vroot, fvp, fdinfo.pr_path,
 		    sizeof (fdinfo.pr_path), credp);
 
-		error = VOP_GETATTR(fvp, &vattr, 0, credp, NULL);
-		if (error != 0) {
+		if (VOP_GETATTR(fvp, &vattr, 0, credp, NULL) != 0) {
+			/*
+			 * Try to write at least a subset of information
+			 */
+			fdinfo.pr_major = 0;
+			fdinfo.pr_minor = 0;
+			fdinfo.pr_ino = 0;
+			fdinfo.pr_mode = 0;
+			fdinfo.pr_uid = (uid_t)-1;
+			fdinfo.pr_gid = (gid_t)-1;
+			fdinfo.pr_rmajor = 0;
+			fdinfo.pr_rminor = 0;
+			fdinfo.pr_size = -1;
+
+			error = elfnote(vp, &offset, NT_FDINFO,
+			    sizeof (fdinfo), &fdinfo, rlimit, credp);
 			VN_RELE(fvp);
 			VN_RELE(vroot);
-			goto done;
+			if (error)
+				goto done;
+			continue;
 		}
 
 		if (fvp->v_type == VSOCK)
@@ -405,9 +421,12 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		error = elfnote(vp, &offset, NT_FDINFO,
 		    sizeof (fdinfo), &fdinfo, rlimit, credp);
 		if (error) {
+			VN_RELE(vroot);
 			goto done;
 		}
 	}
+
+	VN_RELE(vroot);
 
 #if defined(__i386) || defined(__i386_COMPAT)
 	mutex_enter(&p->p_ldtlock);

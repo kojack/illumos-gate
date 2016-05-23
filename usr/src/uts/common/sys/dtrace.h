@@ -25,8 +25,8 @@
  */
 
 /*
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_DTRACE_H
@@ -288,8 +288,11 @@ typedef enum dtrace_probespec {
 #define	DIF_SUBR_INET_NTOA6		43
 #define	DIF_SUBR_TOUPPER		44
 #define	DIF_SUBR_TOLOWER		45
+#define	DIF_SUBR_GETF			46
+#define	DIF_SUBR_JSON			47
+#define	DIF_SUBR_STRTOLL		48
 
-#define	DIF_SUBR_MAX			45	/* max subroutine value */
+#define	DIF_SUBR_MAX			48	/* max subroutine value */
 
 typedef uint32_t dif_instr_t;
 
@@ -351,6 +354,7 @@ typedef struct dtrace_diftype {
 #define	DIF_TYPE_STRING		1	/* type is a D string */
 
 #define	DIF_TF_BYREF		0x1	/* type is passed by reference */
+#define	DIF_TF_BYUREF		0x2	/* user type is passed by reference */
 
 /*
  * A DTrace Intermediate Format variable record is used to describe each of the
@@ -1019,7 +1023,11 @@ typedef struct dtrace_fmtdesc {
 #define	DTRACEOPT_AGGSORTPOS	25	/* agg. position to sort on */
 #define	DTRACEOPT_AGGSORTKEYPOS	26	/* agg. key position to sort on */
 #define	DTRACEOPT_TEMPORAL	27	/* temporally ordered output */
-#define	DTRACEOPT_MAX		28	/* number of options */
+#define	DTRACEOPT_AGGHIST	28	/* histogram aggregation output */
+#define	DTRACEOPT_AGGPACK	29	/* packed aggregation output */
+#define	DTRACEOPT_AGGZOOM	30	/* zoomed aggregation scaling */
+#define	DTRACEOPT_ZONE		31	/* zone in which to enable probes */
+#define	DTRACEOPT_MAX		32	/* number of options */
 
 #define	DTRACEOPT_UNSET		(dtrace_optval_t)-2	/* unset option */
 
@@ -1649,13 +1657,20 @@ typedef struct dof_helper {
  *
  *   A bitwise OR that encapsulates both the mode (either DTRACE_MODE_KERNEL
  *   or DTRACE_MODE_USER) and the policy when the privilege of the enabling
- *   is insufficient for that mode (either DTRACE_MODE_NOPRIV_DROP or
- *   DTRACE_MODE_NOPRIV_RESTRICT).  If the policy is DTRACE_MODE_NOPRIV_DROP,
- *   insufficient privilege will result in the probe firing being silently
- *   ignored for the enabling; if the policy is DTRACE_NODE_NOPRIV_RESTRICT,
- *   insufficient privilege will not prevent probe processing for the
- *   enabling, but restrictions will be in place that induce a UPRIV fault
- *   upon attempt to examine probe arguments or current process state.
+ *   is insufficient for that mode (a combination of DTRACE_MODE_NOPRIV_DROP,
+ *   DTRACE_MODE_NOPRIV_RESTRICT, and DTRACE_MODE_LIMITEDPRIV_RESTRICT).  If
+ *   DTRACE_MODE_NOPRIV_DROP bit is set, insufficient privilege will result
+ *   in the probe firing being silently ignored for the enabling; if the
+ *   DTRACE_NODE_NOPRIV_RESTRICT bit is set, insufficient privilege will not
+ *   prevent probe processing for the enabling, but restrictions will be in
+ *   place that induce a UPRIV fault upon attempt to examine probe arguments
+ *   or current process state.  If the DTRACE_MODE_LIMITEDPRIV_RESTRICT bit
+ *   is set, similar restrictions will be placed upon operation if the
+ *   privilege is sufficient to process the enabling, but does not otherwise
+ *   entitle the enabling to all zones.  The DTRACE_MODE_NOPRIV_DROP and
+ *   DTRACE_MODE_NOPRIV_RESTRICT are mutually exclusive (and one of these
+ *   two policies must be specified), but either may be combined (or not)
+ *   with DTRACE_MODE_LIMITEDPRIV_RESTRICT.
  *
  * 1.10.4  Caller's context
  *
@@ -2054,6 +2069,7 @@ typedef struct dtrace_pops {
 #define	DTRACE_MODE_USER			0x02
 #define	DTRACE_MODE_NOPRIV_DROP			0x10
 #define	DTRACE_MODE_NOPRIV_RESTRICT		0x20
+#define	DTRACE_MODE_LIMITEDPRIV_RESTRICT	0x40
 
 typedef uintptr_t	dtrace_provider_id_t;
 
@@ -2115,12 +2131,18 @@ extern void dtrace_probe(dtrace_id_t, uintptr_t arg0, uintptr_t arg1,
  *
  * 1.2.4  Caller's context
  *
- *   dtms_create_probe() is called from either ioctl() or module load context.
- *   The DTrace framework is locked in such a way that meta providers may not
- *   register or unregister. This means that the meta provider cannot call
- *   dtrace_meta_register() or dtrace_meta_unregister(). However, the context is
- *   such that the provider may (and is expected to) call provider-related
- *   DTrace provider APIs including dtrace_probe_create().
+ *   dtms_create_probe() is called from either ioctl() or module load context
+ *   in the context of a newly-created provider (that is, a provider that
+ *   is a result of a call to dtms_provide_pid()). The DTrace framework is
+ *   locked in such a way that meta providers may not register or unregister,
+ *   such that no other thread can call into a meta provider operation and that
+ *   atomicity is assured with respect to meta provider operations across
+ *   dtms_provide_pid() and subsequent calls to dtms_create_probe().
+ *   The context is thus effectively single-threaded with respect to the meta
+ *   provider, and that the meta provider cannot call dtrace_meta_register()
+ *   or dtrace_meta_unregister(). However, the context is such that the
+ *   provider may (and is expected to) call provider-related DTrace provider
+ *   APIs including dtrace_probe_create().
  *
  * 1.3  void *dtms_provide_pid(void *arg, dtrace_meta_provider_t *mprov,
  *	      pid_t pid)
@@ -2268,6 +2290,7 @@ extern void (*dtrace_helpers_cleanup)();
 extern void (*dtrace_helpers_fork)(proc_t *parent, proc_t *child);
 extern void (*dtrace_cpustart_init)();
 extern void (*dtrace_cpustart_fini)();
+extern void (*dtrace_closef)();
 
 extern void (*dtrace_debugger_init)();
 extern void (*dtrace_debugger_fini)();

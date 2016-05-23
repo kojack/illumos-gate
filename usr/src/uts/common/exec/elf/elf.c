@@ -344,8 +344,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 * We do this because now the brand library can just check
 	 * args->to_model to see if the target is 32-bit or 64-bit without
 	 * having do duplicate all the code above.
+	 *
+	 * The level checks associated with brand handling below are used to
+	 * prevent a loop since the brand elfexec function typically comes back
+	 * through this function. We must check <= here since the nested
+	 * handling in the #! interpreter code will increment the level before
+	 * calling gexec to run the final elfexec interpreter.
 	 */
-	if ((level < 2) &&
+	if ((level <= INTP_MAXDEPTH) &&
 	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		error = BROP(p)->b_elfexec(vp, uap, args,
 		    idatap, level + 1, execsz, setid, exec_file, cred,
@@ -417,11 +423,11 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 *	AT_BASE
 		 *	AT_FLAGS
 		 *	AT_PAGESZ
-		 *	AT_SUN_LDSECURE
+		 *	AT_SUN_AUXFLAGS
 		 *	AT_SUN_HWCAP
 		 *	AT_SUN_HWCAP2
-		 *	AT_SUN_PLATFORM
-		 *	AT_SUN_EXECNAME
+		 *	AT_SUN_PLATFORM (added in stk_copyout)
+		 *	AT_SUN_EXECNAME (added in stk_copyout)
 		 *	AT_NULL
 		 *
 		 * total == 9
@@ -501,6 +507,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	aux = bigwad->elfargs;
 	/*
 	 * Move args to the user's stack.
+	 * This can fill in the AT_SUN_PLATFORM and AT_SUN_EXECNAME aux entries.
 	 */
 	if ((error = exec_args(uap, args, idatap, (void **)&aux)) != 0) {
 		if (error == -1) {
@@ -717,7 +724,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
 		/*
-		 * Note: AT_SUN_PLATFORM was filled in via exec_args()
+		 * Note: AT_SUN_PLATFORM and AT_SUN_EXECNAME were filled in via
+		 * exec_args()
 		 */
 		ADDAUX(aux, AT_BASE, voffset)
 		ADDAUX(aux, AT_FLAGS, at_flags)
@@ -791,7 +799,20 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 		ADDAUX(aux, AT_NULL, 0)
 		postfixsize = (char *)aux - (char *)bigwad->elfargs;
-		ASSERT(postfixsize == args->auxsize);
+
+		/*
+		 * We make assumptions above when we determine how many aux
+		 * vector entries we will be adding. However, if we have an
+		 * invalid elf file, it is possible that mapelfexec might
+		 * behave differently (but not return an error), in which case
+		 * the number of aux entries we actually add will be different.
+		 * We detect that now and error out.
+		 */
+		if (postfixsize != args->auxsize) {
+			DTRACE_PROBE2(elfexec_badaux, int, postfixsize,
+			    int, args->auxsize);
+			goto bad;
+		}
 		ASSERT(postfixsize <= __KERN_NAUXV_IMPL * sizeof (aux_entry_t));
 	}
 
@@ -1737,7 +1758,7 @@ top:
 	ASSERT(p == ttoproc(curthread));
 	prstop(0, 0);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	nphdrs = prnsegs(as, 0) + 2;		/* two CORE note sections */
 
 	/*
@@ -1748,7 +1769,7 @@ top:
 		(void) process_scns(content, p, credp, NULL, NULL, NULL, 0,
 		    NULL, &nshdrs);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT(nshdrs == 0 || nshdrs > 1);
 
@@ -1864,7 +1885,7 @@ top:
 
 	mutex_exit(&p->p_lock);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	i = 2;
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
@@ -1964,7 +1985,7 @@ exclude:
 		}
 		ASSERT(tmp == NULL);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	if (overflow || i != nphdrs) {
 		if (ntries++ == 0) {
@@ -2113,14 +2134,14 @@ exclude:
 			bigwad->shdr[0].sh_info = nphdrs;
 
 		if (nshdrs > 1) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if ((error = process_scns(content, p, credp, vp,
 			    &bigwad->shdr[0], nshdrs, rlimit, &doffset,
 			    NULL)) != 0) {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				goto done;
 			}
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 
 		if ((error = core_write(vp, UIO_SYSSPACE, soffset,

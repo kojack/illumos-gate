@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -84,6 +84,7 @@ static int hostname_validator(int, char *);
 static int path_validator(int, char *);
 static int cmd_validator(int, char *);
 static int disposition_validator(int, char *);
+static int max_protocol_validator(int, char *);
 
 static int smb_enable_resource(sa_resource_t);
 static int smb_disable_resource(sa_resource_t);
@@ -391,14 +392,8 @@ smb_enable_share(sa_share_t share)
 	boolean_t online;
 
 	/*
-	 * We only start in the global zone and only run if we aren't
-	 * running Trusted Extensions.
+	 * Don't support Trusted Extensions.
 	 */
-	if (getzoneid() != GLOBAL_ZONEID) {
-		(void) printf(dgettext(TEXT_DOMAIN,
-		    "SMB: service not supported in local zone\n"));
-		return (SA_NOT_SUPPORTED);
-	}
 	if (is_system_labeled()) {
 		(void) printf(dgettext(TEXT_DOMAIN,
 		    "SMB: service not supported with Trusted Extensions\n"));
@@ -451,12 +446,6 @@ smb_enable_share(sa_share_t share)
 		if (err != SA_OK) {
 			(void) printf(dgettext(TEXT_DOMAIN,
 			    "SMB: Unable to enable service\n"));
-			/*
-			 * For now, it is OK to not be able to enable
-			 * the service.
-			 */
-			if (err == SA_BUSY || err == SA_SYSTEM_ERR)
-				err = SA_OK;
 		} else {
 			online = B_TRUE;
 		}
@@ -887,7 +876,9 @@ struct smb_proto_option_defs {
 } smb_proto_options[] = {
 	{ SMB_CI_SYS_CMNT, 0, MAX_VALUE_BUFLEN,
 	    string_length_check_validator, SMB_REFRESH_REFRESH },
-	{ SMB_CI_MAX_WORKERS, 64, 1024, range_check_validator,
+	{ SMB_CI_MAX_WORKERS, SMB_PI_MAX_WORKERS_MIN, SMB_PI_MAX_WORKERS_MAX,
+	    range_check_validator, SMB_REFRESH_REFRESH },
+	{ SMB_CI_NETBIOS_ENABLE, 0, 0, true_false_validator,
 	    SMB_REFRESH_REFRESH },
 	{ SMB_CI_NBSCOPE, 0, MAX_VALUE_BUFLEN,
 	    string_length_check_validator, 0 },
@@ -923,6 +914,8 @@ struct smb_proto_option_defs {
 	    SMB_REFRESH_REFRESH },
 	{ SMB_CI_DISPOSITION, 0, MAX_VALUE_BUFLEN,
 	    disposition_validator, SMB_REFRESH_REFRESH },
+	{ SMB_CI_MAX_PROTOCOL, 0, MAX_VALUE_BUFLEN, max_protocol_validator,
+	    SMB_REFRESH_REFRESH },
 };
 
 #define	SMB_OPT_NUM \
@@ -1483,10 +1476,6 @@ smb_enable_service(void)
 			} else if (smb_ismaint()) {
 				/* maintenance requires help */
 				ret = SA_SYSTEM_ERR;
-				break;
-			} else if (smb_isdisabled()) {
-				/* disabled is ok */
-				ret = SA_OK;
 				break;
 			} else {
 				/* try another time */
@@ -2354,6 +2343,23 @@ disposition_validator(int index, char *value)
 		return (SA_OK);
 
 	return (SA_BAD_VALUE);
+}
+
+/*ARGSUSED*/
+static int
+max_protocol_validator(int index, char *value)
+{
+	if (value == NULL)
+		return (SA_BAD_VALUE);
+
+	if (*value == '\0')
+		return (SA_OK);
+
+	if (smb_config_check_protocol(value) == 0)
+		return (SA_OK);
+
+	return (SA_BAD_VALUE);
+
 }
 
 /*

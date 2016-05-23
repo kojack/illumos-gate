@@ -12,7 +12,9 @@
 #
 # Copyright 2011, Richard Lowe
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright (c) 2015, Joyent, Inc.  All rights reserved.
 #
 
 include		$(SRC)/Makefile.master
@@ -28,6 +30,7 @@ MANFILES=	Intro.5			\
 		audit_remote.5		\
 		audit_syslog.5		\
 		brands.5		\
+		byteorder.5		\
 		cancellation.5		\
 		charmap.5		\
 		condition.5		\
@@ -39,9 +42,11 @@ MANFILES=	Intro.5			\
 		crypt_unix.5		\
 		device_clean.5		\
 		dhcp.5			\
-		dhcp_modules.5		\
 		environ.5		\
+		epoll.5			\
+		eqn.5			\
 		eqnchar.5		\
+		eventfd.5		\
 		extendedFILE.5		\
 		filesystem.5		\
 		fnmatch.5		\
@@ -52,6 +57,7 @@ MANFILES=	Intro.5			\
 		hal.5			\
 		iconv.5			\
 		iconv_unicode.5		\
+		ieee802.3.5		\
 		ieee802.11.5		\
 		ipfilter.5		\
 		isalist.5		\
@@ -64,7 +70,9 @@ MANFILES=	Intro.5			\
 		lfcompile64.5		\
 		locale.5		\
 		man.5			\
-		mansun.5		\
+		mandoc_char.5		\
+		mandoc_roff.5		\
+		mdoc.5			\
 		me.5			\
 		mech_spnego.5		\
 		mm.5			\
@@ -88,6 +96,7 @@ MANFILES=	Intro.5			\
 		pam_sample.5		\
 		pam_smb_passwd.5	\
 		pam_smbfs_login.5	\
+		pam_timestamp.5		\
 		pam_tsol_account.5	\
 		pam_unix_account.5	\
 		pam_unix_auth.5		\
@@ -110,9 +119,11 @@ MANFILES=	Intro.5			\
 		smf_template.5		\
 		standards.5		\
 		sticky.5		\
+		tbl.5			\
 		tecla.5			\
 		term.5			\
 		threads.5		\
+		timerfd.5		\
 		trusted_extensions.5	\
 		vgrindefs.5		\
 		zones.5			\
@@ -144,6 +155,7 @@ MANLINKS=	ANSI.5		\
 		architecture.5	\
 		availability.5	\
 		compile.5	\
+		endian.5	\
 		intro.5		\
 		pthreads.5	\
 		stability.5	\
@@ -159,6 +171,8 @@ architecture.5	:= LINKSRC = attributes.5
 availability.5	:= LINKSRC = attributes.5
 stability.5	:= LINKSRC = attributes.5
 standard.5	:= LINKSRC = attributes.5
+
+endian.5	:= LINKSRC = byteorder.5
 
 RBAC.5		:= LINKSRC = rbac.5
 
